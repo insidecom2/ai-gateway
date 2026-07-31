@@ -2,7 +2,7 @@ services:
   ollama-auth-proxy:
     build: .
     ports:
-      - "${PORT:-8000}:8000"
+      - "${PORT:-9001}:8000"
     environment:
       API_TOKEN: ${API_TOKEN:?set API_TOKEN in .env}
       OLLAMA_URL: ${OLLAMA_URL_DOCKER:-http://host.docker.internal:11434}
