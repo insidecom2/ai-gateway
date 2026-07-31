@@ -1,0 +1,12 @@
+Metadata-Version: 2.4
+Name: ollama-auth-proxy
+Version: 0.1.0
+Summary: Authenticated HTTP proxy for an Ollama server
+Requires-Python: >=3.11
+Requires-Dist: fastapi<1.0,>=0.115
+Requires-Dist: httpx<1.0,>=0.27
+Requires-Dist: python-dotenv<2.0,>=1.0
+Requires-Dist: uvicorn[standard]<1.0,>=0.30
+Provides-Extra: dev
+Requires-Dist: pytest<9.0,>=8.0; extra == "dev"
+Requires-Dist: pytest-asyncio<1.0,>=0.23; extra == "dev"
