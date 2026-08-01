@@ -1,7 +1,3 @@
-<<<<<<< HEAD
-# ai-gateway
-Python gateway for ollama
-=======
 # Ollama Auth Proxy
 
 Small FastAPI proxy that protects an existing Ollama HTTP server with a bearer token. It does not start Ollama.
@@ -51,5 +47,35 @@ With Ollama running on the host machine, set `API_TOKEN` in `.env` and use:
 docker compose up --build
 ```
 
-Compose maps `host.docker.internal:11434` to the host, so the container can call local Ollama. To use another endpoint in Docker, set `OLLAMA_URL_DOCKER`; keep `OLLAMA_URL` for direct, non-container runs.
->>>>>>> c11a6ca (init project)
+The default Compose configuration publishes the proxy on host port `8000` and reaches host-side Ollama at `http://host.docker.internal:11434`. To use another endpoint in Docker, set `OLLAMA_URL_DOCKER`; keep `OLLAMA_URL` for direct, non-container runs.
+
+### Ubuntu host networking
+
+On some Ubuntu hosts, Docker bridge networking cannot reach `host.docker.internal`, even when Ollama listens on port `11434`. Use a Compose override to run the proxy on the host network instead:
+
+```yaml
+# docker-compose.ubuntu.yml
+services:
+  ollama-auth-proxy:
+    network_mode: host
+    ports: !reset []
+    environment:
+      OLLAMA_URL: http://127.0.0.1:11434
+      HOST: 127.0.0.1
+      PORT: 8000
+```
+
+Start the proxy with both Compose files:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.ubuntu.yml up -d --build
+```
+
+With host networking, Docker does not display a `PORTS` mapping in `docker ps`; this is expected. The proxy listens directly on Ubuntu's port `8000`. Verify it with:
+
+```bash
+curl http://127.0.0.1:8000/api/tags \
+  -H 'Authorization: Bearer replace-with-a-secret'
+
+sudo ss -ltnp | grep ':8000'
+```
