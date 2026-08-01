@@ -1,0 +1,8 @@
+services:
+    ollama-auth-proxy:
+      network_mode: host
+      ports: !reset []
+      environment:
+        OLLAMA_URL: http://127.0.0.1:11434
+        HOST: 127.0.0.1
+        PORT: 8000
