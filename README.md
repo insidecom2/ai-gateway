@@ -17,6 +17,19 @@ Configure `API_TOKEN`, `OLLAMA_URL`, `PORT`, and `OLLAMA_TIMEOUT_SECONDS` in `.e
 Authorization: Bearer replace-with-a-secret
 ```
 
+## Turso adapter
+
+The optional async Turso/libSQL adapter reads `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN`. It is not required by the proxy itself; consumers can use it as a managed context:
+
+```python
+from ollama_proxy.turso import TursoAdapter
+
+async with TursoAdapter.from_env() as database:
+    result = await database.execute("SELECT 1")
+```
+
+Use a `file:` URL for a local SQLite database when needed. Remote Turso URLs require `TURSO_AUTH_TOKEN`.
+
 Example:
 
 ```bash
