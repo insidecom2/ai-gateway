@@ -4,6 +4,7 @@ from httpx import ASGITransport, MockTransport, Request, Response as HTTPXRespon
 
 from ollama_proxy.app import create_app
 from ollama_proxy.config import Settings
+from ollama_proxy.models import MODEL_GEMMA_CELESTIAL
 
 
 def make_app(handler, ollama_url="http://127.0.0.1:11434"):
@@ -65,3 +66,142 @@ async def test_maps_upstream_errors():
     async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://proxy") as client:
         response = await client.get("/api/tags", headers={"Authorization": "Bearer secret"})
     assert response.status_code == 502
+
+
+class FakeTursoAdapter:
+    def __init__(self, rows):
+        self._rows = rows
+
+    @classmethod
+    def from_env(cls, *args, **kwargs):
+        return cls(FakeTursoAdapter._rows)
+
+    async def connect(self):
+        return self
+
+    async def close(self):
+        pass
+
+    async def execute(self, statement, args=None):
+        if "astrology_systems" in str(statement):
+            return _ResultSet(
+                [
+                    {
+                        "display_name": "โหราศาสตร์ไทย",
+                        "description": "ตัวอย่าง",
+                        "house_method": "Whole Sign",
+                        "ayanamsa_note": "Lahiri",
+                    }
+                ]
+            )
+        return _ResultSet(self._rows)
+
+
+class _ResultSet:
+    def __init__(self, rows):
+        self.columns = list(rows[0].keys()) if rows else []
+        self.rows = rows
+
+    def __iter__(self):
+        return iter(self.rows)
+
+
+@pytest.mark.asyncio
+async def test_gemma_celestial_runs_astrology_pipeline(monkeypatch):
+    import ollama_proxy.astrology as astrology
+
+    fake = FakeTursoAdapter(
+        [
+            {
+                "content": "ภพที่ 10 ใช้เป็นกรอบพิจารณาหน้าที่การงาน ชื่อเสียง บทบาทสาธารณะ",
+                "content_summary": "ภพ 10 งาน",
+                "category": "house",
+                "topic": "house_meaning",
+                "planet_code": None,
+                "planet_name": None,
+                "house_number": "10",
+                "zodiac_sign": None,
+                "keywords_json": "[]",
+                "chunk_key": "house.10.career",
+                "document_key": "doc1",
+                "source_locator": "seed:house.10.career",
+            }
+        ]
+    )
+    FakeTursoAdapter._rows = fake._rows
+    monkeypatch.setattr(astrology, "TursoAdapter", FakeTursoAdapter)
+
+    def handler(request: Request) -> HTTPXResponse:
+        body = request.content.decode()
+        assert "ลัคนา" in body
+        assert "ภพที่ 10" in body
+        assert "อยากรู้ดวงการงาน" in body
+        return HTTPXResponse(200, json={"model": MODEL_GEMMA_CELESTIAL, "response": "ดวงการงาน..."})
+
+    app = make_app(handler)
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://proxy") as client:
+        response = await client.post(
+            "/api/generate",
+            headers={"Authorization": "Bearer secret"},
+            json={
+                "model": MODEL_GEMMA_CELESTIAL,
+                "prompt": "อยากรู้ดวงการงานปีนี้เป็นอย่างไร",
+                "birth_date": "1990-08-15",
+                "birth_time": "06:30",
+                "birth_place": "กรุงเทพ",
+                "stream": False,
+            },
+        )
+    assert response.status_code == 200
+    assert response.json()["response"] == "ดวงการงาน..."
+
+
+@pytest.mark.asyncio
+async def test_gemma_celestial_invalid_birth_place_returns_400():
+    async def handler(_: Request) -> HTTPXResponse:
+        raise AssertionError("should not reach Ollama")
+
+    app = make_app(handler)
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://proxy") as client:
+        response = await client.post(
+            "/api/generate",
+            headers={"Authorization": "Bearer secret"},
+            json={
+                "model": MODEL_GEMMA_CELESTIAL,
+                "prompt": "ดูดวง",
+                "birth_date": "1990-08-15",
+                "birth_time": "06:30",
+                "birth_place": "ไม่มีเมืองนี้",
+                "stream": False,
+            },
+        )
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_other_models_bypass_astrology(monkeypatch):
+    import ollama_proxy.astrology as astrology
+
+    called = False
+
+    async def fake_run(*args, **kwargs):
+        nonlocal called
+        called = True
+        return HTTPXResponse(200, json={"response": "nope"})
+
+    monkeypatch.setattr(astrology, "run_astrology", fake_run)
+
+    def handler(request: Request) -> HTTPXResponse:
+        assert request.content == b'{"model":"llama3"}'
+        return HTTPXResponse(200, json={"response": "hi"})
+
+    app = make_app(handler)
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://proxy") as client:
+        response = await client.post(
+            "/api/generate",
+            headers={"Authorization": "Bearer secret"},
+            json={"model": "llama3"},
+        )
+    assert response.status_code == 200
+    assert response.json() == {"response": "hi"}
+    assert called is False

@@ -9,4 +9,7 @@ src/ollama_proxy/__init__.py
 src/ollama_proxy/__main__.py
 src/ollama_proxy/app.py
 src/ollama_proxy/config.py
+src/ollama_proxy/models.py
+src/ollama_proxy/turso.py
 tests/test_proxy.py
+tests/test_turso.py
