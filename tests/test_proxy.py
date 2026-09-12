@@ -77,7 +77,12 @@ async def test_forwards_request_and_response():
     async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://proxy") as client:
         response = await client.post(
             "/api/generate?stream=false",
-            headers={"Authorization": f"Bearer {bearer_token()}", "X-Client": "test"},
+            headers={
+                "Authorization": (
+                    f"Bearer {bearer_token(payload={'iss': 'jantraastro', 'aud': 'ollama', 'sub': 'next-fortune'})}"
+                ),
+                "X-Client": "test",
+            },
             content=b'{"model":"llama3"}',
         )
     assert response.status_code == 201

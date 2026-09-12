@@ -40,7 +40,12 @@ def _is_authorized(request: Request, expected_token: str) -> bool:
     if separator != " " or scheme.lower() != "bearer" or not token:
         return False
     try:
-        jwt.decode(token, expected_token, algorithms=["HS256"], options={"require": ["exp"]})
+        jwt.decode(
+            token,
+            expected_token,
+            algorithms=["HS256"],
+            options={"require": ["exp"], "verify_aud": False},
+        )
     except jwt.InvalidTokenError:
         return False
     return True
