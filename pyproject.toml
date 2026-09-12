@@ -14,6 +14,7 @@ dependencies = [
     "python-dotenv>=1.0,<2.0",
     "uvicorn[standard]>=0.30,<1.0",
     "pyswisseph>=2.10.3,<3.0",
+    "pyjwt>=2.0,<3.0",
 ]
 
 [project.optional-dependencies]

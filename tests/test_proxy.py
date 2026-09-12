@@ -1,4 +1,7 @@
+from datetime import datetime, timedelta, timezone
+
 import httpx
+import jwt
 import pytest
 from httpx import ASGITransport, MockTransport, Request, Response as HTTPXResponse
 
@@ -6,10 +9,19 @@ from ollama_proxy.app import create_app
 from ollama_proxy.config import Settings
 from ollama_proxy.models import MODEL_GEMMA_CELESTIAL
 
+TOKEN_SECRET = "a-32-byte-minimum-hs256-test-key"
+
+
+def bearer_token(*, secret=TOKEN_SECRET, algorithm="HS256", payload=None):
+    claims = {"exp": datetime.now(timezone.utc) + timedelta(minutes=5)}
+    if payload:
+        claims.update(payload)
+    return jwt.encode(claims, secret, algorithm=algorithm)
+
 
 def make_app(handler, ollama_url="http://127.0.0.1:11434"):
     client = httpx.AsyncClient(transport=MockTransport(handler))
-    return create_app(Settings(api_token="secret", ollama_url=ollama_url), client=client)
+    return create_app(Settings(api_token=TOKEN_SECRET, ollama_url=ollama_url), client=client)
 
 
 @pytest.mark.asyncio
@@ -18,6 +30,37 @@ async def test_requires_bearer_token():
     async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://proxy") as client:
         response = await client.get("/api/tags")
     assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_rejects_short_hs256_signing_key_at_startup():
+    app = create_app(Settings(api_token="too-short", ollama_url="http://ollama:11434"))
+    with pytest.raises(RuntimeError, match="at least 32 bytes"):
+        async with app.router.lifespan_context(app):
+            pass
+
+
+@pytest.mark.asyncio
+async def test_rejects_invalid_jwts_without_calling_upstream():
+    def handler(_: Request) -> HTTPXResponse:
+        raise AssertionError("invalid JWT must not reach upstream")
+
+    app = make_app(handler)
+    invalid_tokens = [
+        bearer_token(secret="a-different-32-byte-hs256-test-key"),
+        jwt.encode({}, TOKEN_SECRET, algorithm="HS256"),
+        bearer_token(payload={"exp": datetime.now(timezone.utc) - timedelta(seconds=1)}),
+        bearer_token(
+            algorithm="HS384",
+            secret="a" * 64,
+        ),
+        TOKEN_SECRET,
+    ]
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://proxy") as client:
+        for token in invalid_tokens:
+            response = await client.get("/api/tags", headers={"Authorization": f"Bearer {token}"})
+            assert response.status_code == 401
+            assert response.headers["www-authenticate"] == "Bearer"
 
 
 @pytest.mark.asyncio
@@ -34,7 +77,7 @@ async def test_forwards_request_and_response():
     async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://proxy") as client:
         response = await client.post(
             "/api/generate?stream=false",
-            headers={"Authorization": "Bearer secret", "X-Client": "test"},
+            headers={"Authorization": f"Bearer {bearer_token()}", "X-Client": "test"},
             content=b'{"model":"llama3"}',
         )
     assert response.status_code == 201
@@ -47,7 +90,7 @@ async def test_streams_upstream_response():
     async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://proxy") as client:
         response = await client.post(
             "/api/generate",
-            headers={"Authorization": "Bearer secret"},
+            headers={"Authorization": f"Bearer {bearer_token()}"},
             json={"model": "llama3", "prompt": "hello", "stream": True},
         )
     assert response.status_code == 200
@@ -64,7 +107,7 @@ async def test_maps_upstream_errors():
 
     app = make_app(handler)
     async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://proxy") as client:
-        response = await client.get("/api/tags", headers={"Authorization": "Bearer secret"})
+        response = await client.get("/api/tags", headers={"Authorization": f"Bearer {bearer_token()}"})
     assert response.status_code == 502
 
 
@@ -142,7 +185,7 @@ async def test_gemma_celestial_runs_astrology_pipeline(monkeypatch):
     async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://proxy") as client:
         response = await client.post(
             "/api/generate",
-            headers={"Authorization": "Bearer secret"},
+            headers={"Authorization": f"Bearer {bearer_token()}"},
             json={
                 "model": MODEL_GEMMA_CELESTIAL,
                 "prompt": "อยากรู้ดวงการงานปีนี้เป็นอย่างไร",
@@ -165,7 +208,7 @@ async def test_gemma_celestial_invalid_birth_place_returns_400():
     async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://proxy") as client:
         response = await client.post(
             "/api/generate",
-            headers={"Authorization": "Bearer secret"},
+            headers={"Authorization": f"Bearer {bearer_token()}"},
             json={
                 "model": MODEL_GEMMA_CELESTIAL,
                 "prompt": "ดูดวง",
@@ -199,7 +242,7 @@ async def test_other_models_bypass_astrology(monkeypatch):
     async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://proxy") as client:
         response = await client.post(
             "/api/generate",
-            headers={"Authorization": "Bearer secret"},
+            headers={"Authorization": f"Bearer {bearer_token()}"},
             json={"model": "llama3"},
         )
     assert response.status_code == 200

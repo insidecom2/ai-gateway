@@ -7,14 +7,14 @@ Small FastAPI proxy that protects an existing Ollama HTTP server with a bearer t
 ```bash
 uv sync --extra dev
 cp .env.example .env
-# Edit .env and set API_TOKEN, then run:
+# Edit .env and set API_TOKEN to a random value of at least 32 bytes, then run:
 uv run python -m ollama_proxy
 ```
 
-Configure `API_TOKEN`, `OLLAMA_URL`, `PORT`, and `OLLAMA_TIMEOUT_SECONDS` in `.env` or as environment variables. Every proxied request must include:
+Configure `API_TOKEN`, `OLLAMA_URL`, `PORT`, and `OLLAMA_TIMEOUT_SECONDS` in `.env` or as environment variables. `API_TOKEN` is the HS256 JWT signing secret and must contain at least 32 bytes; generate one with `openssl rand -hex 32`. Every proxied request must include a JWT signed with that secret and an unexpired `exp` claim:
 
 ```text
-Authorization: Bearer replace-with-a-secret
+Authorization: Bearer <HS256-JWT>
 ```
 
 ## Turso adapter
@@ -34,14 +34,14 @@ Example:
 
 ```bash
 curl http://127.0.0.1:8000/api/tags \
-  -H 'Authorization: Bearer replace-with-a-secret'
+  -H 'Authorization: Bearer <HS256-JWT>'
 ```
 
 Ollama streaming is passed through immediately. For generated text, include `"stream": true` in the JSON request:
 
 ```bash
 curl http://127.0.0.1:8000/api/generate \
-  -H 'Authorization: Bearer replace-with-a-secret' \
+  -H 'Authorization: Bearer <HS256-JWT>' \
   -H 'Content-Type: application/json' \
   -d '{"model":"llama3","prompt":"Hello","stream":true}'
 ```
@@ -54,7 +54,7 @@ uv run pytest
 
 ## Run with Docker
 
-With Ollama running on the host machine, set `API_TOKEN` in `.env` and use:
+With Ollama running on the host machine, set a 32-byte-or-longer `API_TOKEN` in `.env` and use:
 
 ```bash
 docker compose up --build
@@ -88,7 +88,7 @@ With host networking, Docker does not display a `PORTS` mapping in `docker ps`; 
 
 ```bash
 curl http://127.0.0.1:8000/api/tags \
-  -H 'Authorization: Bearer replace-with-a-secret'
+  -H 'Authorization: Bearer <HS256-JWT>'
 
 sudo ss -ltnp | grep ':8000'
 ```

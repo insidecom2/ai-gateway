@@ -1,9 +1,9 @@
-import hmac
 import json
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 import httpx
+import jwt
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
@@ -37,7 +37,13 @@ def _is_authorized(request: Request, expected_token: str) -> bool:
         return False
     value = request.headers.get("authorization", "")
     scheme, separator, token = value.partition(" ")
-    return separator == " " and scheme.lower() == "bearer" and hmac.compare_digest(token, expected_token)
+    if separator != " " or scheme.lower() != "bearer" or not token:
+        return False
+    try:
+        jwt.decode(token, expected_token, algorithms=["HS256"], options={"require": ["exp"]})
+    except jwt.InvalidTokenError:
+        return False
+    return True
 
 
 def create_app(settings: Settings | None = None, client: httpx.AsyncClient | None = None) -> FastAPI:
@@ -47,6 +53,8 @@ def create_app(settings: Settings | None = None, client: httpx.AsyncClient | Non
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if not resolved_settings.api_token:
             raise RuntimeError("API_TOKEN must be set")
+        if len(resolved_settings.api_token.encode()) < 32:
+            raise RuntimeError("API_TOKEN must be at least 32 bytes for HS256")
         if not resolved_settings.ollama_url:
             raise RuntimeError("OLLAMA_URL must be set")
         owns_client = client is None
