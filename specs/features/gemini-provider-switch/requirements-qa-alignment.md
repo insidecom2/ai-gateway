@@ -17,6 +17,8 @@
 | FR-004 | Normalize Gemini streaming into Ollama-compatible NDJSON. | Clear | None | None |
 | FR-005 | Read Gemini credentials from `GEMINI_API_KEY`. | Clear | None | None |
 | FR-006 | Let an explicit boolean `astrology` request field override the configured astrology model's automatic routing, and strip the proxy-only false flag before Ollama forwarding. | Clear | None | None |
+| FR-007 | Route Gemini `POST /api/chat` requests by model name, translate messages, and return Ollama chat response shapes. | Clear | None | None |
+| FR-008 | Map `options.num_predict` to Gemini `generationConfig.maxOutputTokens`. | Clear | None | None |
 | NFR-001 | Preserve existing JWT authentication before provider access. | Clear | None | None |
 | NFR-002 | Do not expose Gemini credentials in errors or logs. | Clear | None | None |
 | EC-001 | Reject a Gemini request with no configured key without provider fallback. | Clear | None | None |
@@ -34,6 +36,9 @@
 | AC-006 | Analyst | Gemini upstream errors and timeouts return a clear error without key exposure. |
 | AC-007 | Analyst | Invalid JWTs are rejected before either provider is called. |
 | AC-008 | Analyst | An explicit `astrology: false` skips the astrology pipeline for the configured model and is removed before forwarding to Ollama. |
+| AC-009 | Analyst | Gemini `POST /api/chat` maps `messages` and returns an Ollama chat-shaped response. |
+| AC-010 | Analyst | Ollama `POST /api/chat` requests keep forwarding to Ollama unchanged. |
+| AC-011 | Analyst | Gemini chat streaming returns Ollama-compatible chat NDJSON chunks. |
 
 ## Pasted Test Cases
 
@@ -53,6 +58,9 @@
 | AC-006 | Upstream failures/timeouts are surfaced without secrets. | TC-006 | Covered | Assert status/message and no key in response. |
 | AC-007 | Authentication remains provider-independent. | TC-007 | Covered | Assert invalid JWT causes no upstream calls. |
 | AC-008 | Explicit astrology false skips pipeline and is stripped before Ollama. | TC-008 | Covered | Assert pipeline is not called and upstream body has no `astrology` field. |
+| AC-009 | Gemini chat maps messages and response shape. | TC-009 | Covered | Mock Gemini and inspect translated request and Ollama chat response. |
+| AC-010 | Ollama chat passthrough remains intact. | TC-010 | Covered | Mock Ollama and assert request body is unchanged. |
+| AC-011 | Gemini chat stream is normalized. | TC-011 | Covered | Mock Gemini SSE and assert chat NDJSON chunks. |
 
 ## QA Traceability Matrix
 
@@ -64,6 +72,8 @@
 | FR-004 | AC-004 | TC-004 | Unit/API | High | Verified |
 | FR-005 | AC-001, AC-003 | TC-001, TC-003 | Unit/API | High | Verified |
 | FR-006 | AC-008 | TC-008 | Unit/API | High | Verified |
+| FR-007 | AC-009, AC-010, AC-011 | TC-009, TC-010, TC-011 | Unit/API | High | Verified |
+| FR-008 | AC-009 | TC-009 | Unit/API | Medium | Verified |
 | NFR-001 | AC-007 | TC-007 | Unit/API | High | Verified |
 | NFR-002 | AC-006 | TC-006 | Unit/API | High | Verified |
 | EC-001 | AC-003 | TC-003 | Unit/API | High | Verified |
@@ -81,6 +91,9 @@
 | TC-006 | Gemini timeout/error | Mock timeout and non-success response. | Appropriate upstream error; no API key in response. | Unit/API | High |
 | TC-007 | Invalid JWT on Gemini model | Send Gemini model request with invalid token. | 401; Gemini and Ollama are not called. | Unit/API | High |
 | TC-008 | Pre-enriched prompt with configured astrology model | Send `astrology: false` and a configured astrology model. | Astrology pipeline is skipped; proxy removes the flag before Ollama forwarding. | Unit/API | High |
+| TC-009 | Gemini chat request | Send `POST /api/chat` with system, user, assistant messages, `num_predict`, and Gemini model. | Gemini receives translated contents/config; response uses Ollama chat shape. | Unit/API | High |
+| TC-010 | Ollama chat regression | Send `POST /api/chat` with an Ollama model. | Request body is forwarded unchanged to Ollama. | Unit/API | High |
+| TC-011 | Gemini chat streaming | Send `POST /api/chat` with `stream: true`; mock Gemini SSE. | Response contains assistant message chunks and final `done` chunk. | Unit/API | High |
 
 ## Extra or Conflicting Test Cases
 
@@ -111,6 +124,6 @@
 ## Verification Results
 
 - Command: `.venv/bin/pytest tests`
-- Result: 23 passed.
+- Result: 28 passed.
 - Note: pytest reports deprecation warnings from the installed
   `pytest-asyncio` version; there are no test failures.

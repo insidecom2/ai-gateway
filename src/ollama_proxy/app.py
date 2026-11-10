@@ -82,7 +82,8 @@ def create_app(settings: Settings | None = None, client: httpx.AsyncClient | Non
         if not _is_authorized(request, resolved_settings.api_token):
             return JSONResponse({"detail": "Unauthorized"}, status_code=401, headers={"WWW-Authenticate": "Bearer"})
 
-        if path == "api/generate" and request.method == "POST":
+        if path in {"api/generate", "api/chat"} and request.method == "POST":
+            chat_mode = path == "api/chat"
             try:
                 body = json.loads(await request.body())
             except (json.JSONDecodeError, UnicodeDecodeError):
@@ -113,6 +114,7 @@ def create_app(settings: Settings | None = None, client: httpx.AsyncClient | Non
                         body,
                         gemini_api_key=resolved_settings.gemini_api_key,
                         timeout_seconds=resolved_settings.timeout_seconds,
+                        chat=chat_mode,
                     )
                 except ValueError as exc:
                     return JSONResponse({"detail": str(exc)}, status_code=400)
@@ -155,10 +157,24 @@ def create_app(settings: Settings | None = None, client: httpx.AsyncClient | Non
                 )
 
             if use_gemini:
+                system = body.get("system")
+                if chat_mode:
+                    return await generate_gemini(
+                        app.state.client,
+                        resolved_settings.gemini_api_key,
+                        model,
+                        None,
+                        system=system if isinstance(system, str) else None,
+                        messages=body.get("messages"),
+                        stream=bool(body.get("stream", False)),
+                        chat=True,
+                        options=body.get("options"),
+                        timeout_seconds=resolved_settings.timeout_seconds,
+                    )
+
                 prompt = body.get("prompt")
                 if not isinstance(prompt, str) or not prompt:
                     return JSONResponse({"detail": "prompt is required for Gemini generation"}, status_code=400)
-                system = body.get("system")
                 return await generate_gemini(
                     app.state.client,
                     resolved_settings.gemini_api_key,
@@ -166,6 +182,7 @@ def create_app(settings: Settings | None = None, client: httpx.AsyncClient | Non
                     prompt,
                     system=system if isinstance(system, str) else None,
                     stream=bool(body.get("stream", False)),
+                    options=body.get("options"),
                     timeout_seconds=resolved_settings.timeout_seconds,
                 )
 
@@ -176,7 +193,7 @@ def create_app(settings: Settings | None = None, client: httpx.AsyncClient | Non
         try:
             content = await request.body()
             if (
-                path == "api/generate"
+                path in {"api/generate", "api/chat"}
                 and request.method == "POST"
                 and isinstance(body, dict)
                 and body.get("astrology") is False

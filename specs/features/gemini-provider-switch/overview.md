@@ -3,19 +3,22 @@
 ## Goal
 
 Allow authenticated clients of the existing Ollama-compatible proxy to select
-Google Gemini or Ollama by the model name in a generation request.
+Google Gemini or Ollama by the model name in generation and chat requests.
 
 ## Scope
 
-- On `POST /api/generate`, route model names beginning with `gemini-` to the
-  Gemini API; route all other model names to the configured Ollama server.
+- On `POST /api/generate` and `POST /api/chat`, route model names beginning
+  with `gemini-` to the Gemini API; route all other model names to the
+  configured Ollama server.
 - Support ordinary text-generation requests and the existing astrology flow
   (chart calculation and Turso knowledge context) with either provider.
 - Preserve automatic astrology routing for the existing configured astrology
   model, with an explicit boolean `astrology` field to select or skip that
   pipeline for a request.
 - Preserve the proxy's Ollama-compatible response format, including
-  non-streaming and streaming generation responses.
+  non-streaming and streaming generation and chat responses.
+- Translate Ollama chat `messages` into Gemini conversation contents and map
+  `options.num_predict` to Gemini's maximum output token setting.
 - Read Gemini credentials from `GEMINI_API_KEY`; fail clearly when a Gemini
   request is made without a configured key.
 - Keep current JWT authentication and existing Ollama behavior.
@@ -54,10 +57,18 @@ Google Gemini or Ollama by the model name in a generation request.
 8. Given a request with `"astrology": false`, when it uses the configured
    astrology model, then the proxy skips its astrology pipeline and removes
    the proxy-only field before forwarding the request to Ollama.
+9. Given an authenticated `POST /api/chat` request with a Gemini model and
+   `messages`, when chat generation is requested, then the proxy maps the
+   conversation to Gemini and returns an Ollama chat-shaped response.
+10. Given an authenticated `POST /api/chat` request with an Ollama model,
+    when chat generation is requested, then the proxy continues to forward the
+    request to Ollama unchanged.
+11. Given a Gemini chat request with `stream: true`, when Gemini emits text,
+    then the proxy returns Ollama-compatible chat NDJSON chunks.
 
 ## API Candidates
 
-- Existing endpoint: `POST /api/generate`.
+- Existing endpoints: `POST /api/generate` and `POST /api/chat`.
 - Existing request field: `model`; the `gemini-` prefix selects Gemini, and
   other names select Ollama.
 - Existing `stream` field controls streaming for either provider.
@@ -69,14 +80,14 @@ Google Gemini or Ollama by the model name in a generation request.
 ## Event Flow
 
 1. Authenticate the bearer JWT using the existing proxy boundary.
-2. Parse the generation request and inspect its model name.
+2. Parse the request and inspect its model name.
 3. If the model starts with `gemini-`, use Gemini; otherwise use Ollama.
 4. When `astrology` is an explicit boolean, follow it; otherwise retain the
    configured astrology model's automatic routing. If selected, compute chart
    data and fetch knowledge context, then build the existing astrology prompt
    for the chosen provider.
-5. Convert provider output to the Ollama-compatible generation response,
-   including normalized streaming chunks when requested.
+5. Convert provider output to the Ollama-compatible generation or chat
+   response, including normalized streaming chunks when requested.
 
 ## Edge Cases
 
