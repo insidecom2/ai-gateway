@@ -309,6 +309,88 @@ async def test_gemini_model_uses_gemini_and_normalizes_response():
 
 
 @pytest.mark.asyncio
+async def test_gemini_chat_maps_messages_options_and_response_shape():
+    def handler(request: Request) -> HTTPXResponse:
+        body = json.loads(request.content)
+        assert body["contents"] == [
+            {"role": "user", "parts": [{"text": "hello"}]},
+            {"role": "model", "parts": [{"text": "Hi there"}]},
+            {"role": "user", "parts": [{"text": "continue"}]},
+        ]
+        assert body["systemInstruction"]["parts"] == [{"text": "be helpful"}]
+        assert body["generationConfig"]["maxOutputTokens"] == 321
+        return HTTPXResponse(
+            200,
+            json={"candidates": [{"content": {"parts": [{"text": "Gemini chat answer"}]}}]},
+        )
+
+    app = make_app(handler, gemini_api_key="secret-gemini-key")
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://proxy") as client:
+        response = await client.post(
+            "/api/chat",
+            headers={"Authorization": f"Bearer {bearer_token()}"},
+            json={
+                "model": "gemini-test",
+                "messages": [
+                    {"role": "system", "content": "be helpful"},
+                    {"role": "user", "content": "hello"},
+                    {"role": "assistant", "content": "Hi there"},
+                    {"role": "user", "content": "continue"},
+                ],
+                "options": {"num_predict": 321},
+                "stream": False,
+            },
+        )
+    assert response.status_code == 200
+    assert response.json() == {
+        "model": "gemini-test",
+        "message": {"role": "assistant", "content": "Gemini chat answer"},
+        "done": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_gemini_chat_stream_uses_ollama_chat_chunk_shape():
+    def handler(_: Request) -> HTTPXResponse:
+        return HTTPXResponse(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=b'data: {"candidates":[{"content":{"parts":[{"text":"hello"}]}}]}\n\n',
+        )
+
+    app = make_app(handler, gemini_api_key="secret-gemini-key")
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://proxy") as client:
+        response = await client.post(
+            "/api/chat",
+            headers={"Authorization": f"Bearer {bearer_token()}"},
+            json={"model": "gemini-test", "messages": [{"role": "user", "content": "hello"}], "stream": True},
+        )
+    chunks = [json.loads(line) for line in response.text.splitlines()]
+    assert response.status_code == 200
+    assert chunks[0]["message"] == {"role": "assistant", "content": "hello"}
+    assert chunks[0]["done"] is False
+    assert chunks[-1]["done"] is True
+
+
+@pytest.mark.asyncio
+async def test_ollama_chat_requests_keep_forwarding_to_ollama():
+    def handler(request: Request) -> HTTPXResponse:
+        assert str(request.url) == "http://ollama:11434/api/chat"
+        assert request.content == b'{"model":"llama3","messages":[{"role":"user","content":"hello"}]}'
+        return HTTPXResponse(200, json={"message": {"role": "assistant", "content": "hi"}, "done": True})
+
+    app = make_app(handler, ollama_url="http://ollama:11434")
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://proxy") as client:
+        response = await client.post(
+            "/api/chat",
+            headers={"Authorization": f"Bearer {bearer_token()}"},
+            json={"model": "llama3", "messages": [{"role": "user", "content": "hello"}]},
+        )
+    assert response.status_code == 200
+    assert response.json()["message"]["content"] == "hi"
+
+
+@pytest.mark.asyncio
 async def test_gemini_request_without_key_does_not_call_upstream():
     def handler(_: Request) -> HTTPXResponse:
         raise AssertionError("Gemini request must not reach upstream without a key")
@@ -467,3 +549,57 @@ async def test_astrology_flag_routes_gemini_through_context_pipeline(monkeypatch
         )
     assert response.status_code == 200
     assert response.json()["response"] == "ดวงการงานจาก Gemini"
+
+
+@pytest.mark.asyncio
+async def test_gemini_chat_astrology_uses_messages_and_returns_chat_response(monkeypatch):
+    import ollama_proxy.astrology as astrology
+
+    FakeTursoAdapter._rows = [
+        {
+            "content": "ความรู้โหราศาสตร์สำหรับคำถามนี้",
+            "content_summary": "ตัวอย่าง",
+            "category": "general",
+            "topic": "career",
+            "planet_code": None,
+            "planet_name": None,
+            "house_number": None,
+            "zodiac_sign": None,
+            "keywords_json": "[]",
+            "chunk_key": "career.example",
+            "document_key": "doc1",
+            "source_locator": "seed:career.example",
+        }
+    ]
+    monkeypatch.setattr(astrology, "TursoAdapter", FakeTursoAdapter)
+
+    def handler(request: Request) -> HTTPXResponse:
+        body = json.loads(request.content)
+        prompt = body["contents"][0]["parts"][0]["text"]
+        assert "อยากรู้ดวงการงาน" in prompt
+        assert "ความรู้โหราศาสตร์สำหรับคำถามนี้" in prompt
+        assert body["generationConfig"]["maxOutputTokens"] == 700
+        return HTTPXResponse(
+            200,
+            json={"candidates": [{"content": {"parts": [{"text": "ดวงจาก Gemini chat"}]}}]},
+        )
+
+    app = make_app(handler, gemini_api_key="secret-gemini-key")
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://proxy") as client:
+        response = await client.post(
+            "/api/chat",
+            headers={"Authorization": f"Bearer {bearer_token()}"},
+            json={
+                "model": "gemini-test",
+                "messages": [{"role": "user", "content": "อยากรู้ดวงการงาน"}],
+                "astrology": True,
+                "options": {"num_predict": 700},
+                "stream": False,
+            },
+        )
+    assert response.status_code == 200
+    assert response.json() == {
+        "model": "gemini-test",
+        "message": {"role": "assistant", "content": "ดวงจาก Gemini chat"},
+        "done": True,
+    }

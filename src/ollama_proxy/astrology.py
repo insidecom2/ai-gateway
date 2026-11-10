@@ -296,14 +296,27 @@ async def _call_ollama(
     model: str,
     prompt: str,
     stream: bool,
-    num_predict: int | None = None,
+    *,
+    chat: bool = False,
+    options: dict[str, Any] | None = None,
 ) -> httpx.Response:
-    options = {"num_predict": num_predict} if num_predict else None
-    payload: dict[str, Any] = {"model": model, "prompt": prompt, "system": SYSTEM_PROMPT, "stream": stream}
+    if chat:
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            "stream": stream,
+        }
+        endpoint = "api/chat"
+    else:
+        payload = {"model": model, "prompt": prompt, "system": SYSTEM_PROMPT, "stream": stream}
+        endpoint = "api/generate"
     if options:
         payload["options"] = options
     return await client.post(
-        f"{ollama_url}/api/generate",
+        f"{ollama_url}/{endpoint}",
         json=payload,
         timeout=httpx.Timeout(300.0),
     )
@@ -318,6 +331,7 @@ async def run_astrology(
     *,
     gemini_api_key: str = "",
     timeout_seconds: float = 120.0,
+    chat: bool = False,
 ) -> httpx.Response | JSONResponse | StreamingResponse:
     question = _extract_question(body)
     if not question:
@@ -346,7 +360,19 @@ async def run_astrology(
             model,
             prompt,
             system=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": prompt}] if chat else None,
             stream=stream,
+            chat=chat,
+            options=body.get("options"),
             timeout_seconds=timeout_seconds,
         )
-    return await _call_ollama(ollama_client, ollama_url, model, prompt, stream)
+    options = body.get("options")
+    return await _call_ollama(
+        ollama_client,
+        ollama_url,
+        model,
+        prompt,
+        stream,
+        chat=chat,
+        options=options if isinstance(options, dict) else None,
+    )

@@ -48,10 +48,11 @@ curl http://127.0.0.1:8000/api/generate \
 
 ## Select Gemini or Ollama
 
-For `POST /api/generate`, the model name selects the provider: names beginning
-with `gemini-` are sent to Google's Gemini API, and other model names continue
-to use Ollama. Set `GEMINI_API_KEY` to enable Gemini. Gemini responses and
-streaming chunks use the proxy's Ollama-compatible response format.
+For `POST /api/generate` and `POST /api/chat`, the model name selects the
+provider: names beginning with `gemini-` are sent to Google's Gemini API, and
+other model names continue to use Ollama. Set `GEMINI_API_KEY` to enable
+Gemini. Gemini responses and streaming chunks use the matching Ollama response
+format for each endpoint.
 
 ```bash
 curl http://127.0.0.1:8000/api/generate \
@@ -61,8 +62,18 @@ curl http://127.0.0.1:8000/api/generate \
 ```
 
 To run the existing chart and Turso context pipeline with a Gemini model, set
-`"astrology": true` in the generation request. The configured astrology model
-continues to invoke that pipeline automatically.
+`"astrology": true` in the generation or chat request. For `/api/chat`, send
+the question in `messages`. The configured astrology model continues to invoke
+that pipeline automatically unless `astrology` is explicitly set to `false`.
+
+```bash
+curl http://127.0.0.1:8000/api/chat \
+  -H 'Authorization: Bearer <HS256-JWT>' \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"gemini-3.1-flash-lite","messages":[{"role":"user","content":"Hello"}],"stream":true,"options":{"num_predict":512}}'
+```
+
+For Gemini, `options.num_predict` maps to `generationConfig.maxOutputTokens`.
 
 The `astrology_ask.py` CLI uses `PROXY_URL` (default `http://127.0.0.1:8000`)
 and signs a short-lived JWT with `API_TOKEN`. Set the same `API_TOKEN` for the

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
+from typing import Any
 from urllib.parse import quote
 
 import httpx
@@ -35,12 +36,30 @@ def _extract_text(payload: dict) -> str:
     )
 
 
-def _ollama_chunk(model: str, text: str, done: bool) -> bytes:
-    payload = {"model": model, "response": text, "done": done}
+def _message_text(message: dict[str, Any]) -> str:
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            part.get("text", "")
+            for part in content
+            if isinstance(part, dict)
+            and part.get("type") == "text"
+            and isinstance(part.get("text"), str)
+        )
+    return ""
+
+
+def _ollama_chunk(model: str, text: str, done: bool, chat: bool = False) -> bytes:
+    if chat:
+        payload = {"model": model, "message": {"role": "assistant", "content": text}, "done": done}
+    else:
+        payload = {"model": model, "response": text, "done": done}
     return (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
 
 
-async def _stream_response(upstream: httpx.Response, model: str) -> AsyncIterator[bytes]:
+async def _stream_response(upstream: httpx.Response, model: str, chat: bool) -> AsyncIterator[bytes]:
     yielded_text = False
     try:
         async for line in upstream.aiter_lines():
@@ -56,9 +75,9 @@ async def _stream_response(upstream: httpx.Response, model: str) -> AsyncIterato
                 continue
             if text:
                 yielded_text = True
-                yield _ollama_chunk(model, text, False)
+                yield _ollama_chunk(model, text, False, chat)
         if yielded_text:
-            yield _ollama_chunk(model, "", True)
+            yield _ollama_chunk(model, "", True, chat)
         else:
             yield json.dumps(
                 {"error": {"detail": "Gemini returned no generated text"}, "done": True},
@@ -77,10 +96,13 @@ async def generate_gemini(
     client: httpx.AsyncClient,
     api_key: str,
     model: str,
-    prompt: str,
+    prompt: str | None,
     *,
     system: str | None = None,
+    messages: list[dict[str, Any]] | None = None,
     stream: bool = False,
+    chat: bool = False,
+    options: dict[str, Any] | None = None,
     timeout_seconds: float = 120.0,
 ) -> JSONResponse | StreamingResponse:
     if not api_key:
@@ -89,10 +111,48 @@ async def generate_gemini(
             status_code=503,
         )
 
-    contents = [{"role": "user", "parts": [{"text": prompt}]}]
-    request_body: dict = {"contents": contents}
-    if system:
-        request_body["systemInstruction"] = {"parts": [{"text": system}]}
+    contents: list[dict[str, Any]] = []
+    system_parts = [system] if system else []
+    if messages is not None:
+        if not isinstance(messages, list):
+            return JSONResponse({"detail": "messages must be a list"}, status_code=400)
+        for message in messages:
+            if not isinstance(message, dict):
+                return JSONResponse({"detail": "each message must be an object"}, status_code=400)
+            role = message.get("role")
+            text = _message_text(message)
+            if not text:
+                continue
+            if role == "system":
+                system_parts.append(text)
+            elif role == "user":
+                contents.append({"role": "user", "parts": [{"text": text}]})
+            elif role == "assistant":
+                contents.append({"role": "model", "parts": [{"text": text}]})
+            else:
+                return JSONResponse({"detail": f"unsupported message role: {role}"}, status_code=400)
+    elif isinstance(prompt, str) and prompt:
+        contents.append({"role": "user", "parts": [{"text": prompt}]})
+    else:
+        return JSONResponse({"detail": "prompt or messages are required for Gemini"}, status_code=400)
+
+    if not contents:
+        return JSONResponse({"detail": "messages must include user or assistant text"}, status_code=400)
+
+    request_body: dict[str, Any] = {"contents": contents}
+    if system_parts:
+        request_body["systemInstruction"] = {"parts": [{"text": part} for part in system_parts]}
+    generation_config: dict[str, Any] = {}
+    if isinstance(options, dict):
+        num_predict = options.get("num_predict")
+        if isinstance(num_predict, int) and not isinstance(num_predict, bool) and num_predict > 0:
+            generation_config["maxOutputTokens"] = num_predict
+        for option_name, api_name in (("temperature", "temperature"), ("top_p", "topP"), ("top_k", "topK")):
+            value = options.get(option_name)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                generation_config[api_name] = value
+    if generation_config:
+        request_body["generationConfig"] = generation_config
 
     action = "streamGenerateContent?alt=sse" if stream else "generateContent"
     url = f"{_GEMINI_API_BASE}/{quote(model, safe='')}:" + action
@@ -120,7 +180,7 @@ async def generate_gemini(
 
     if stream:
         return StreamingResponse(
-            _stream_response(upstream, model),
+            _stream_response(upstream, model, chat),
             status_code=200,
             media_type="application/x-ndjson",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
@@ -134,6 +194,6 @@ async def generate_gemini(
     finally:
         await upstream.aclose()
 
-    return JSONResponse(
-        {"model": model, "response": text, "done": True},
-    )
+    if chat:
+        return JSONResponse({"model": model, "message": {"role": "assistant", "content": text}, "done": True})
+    return JSONResponse({"model": model, "response": text, "done": True})
