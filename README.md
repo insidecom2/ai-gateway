@@ -11,7 +11,7 @@ cp .env.example .env
 uv run python -m ollama_proxy
 ```
 
-Configure `API_TOKEN`, `OLLAMA_URL`, `PORT`, and `OLLAMA_TIMEOUT_SECONDS` in `.env` or as environment variables. `API_TOKEN` is the HS256 JWT signing secret and must contain at least 32 bytes; generate one with `openssl rand -hex 32`. Every proxied request must include a JWT signed with that secret and an unexpired `exp` claim:
+Configure `API_TOKEN`, `OLLAMA_URL`, `GEMINI_API_KEY` (when using Gemini), `PORT`, and `OLLAMA_TIMEOUT_SECONDS` in `.env` or as environment variables. `API_TOKEN` is the HS256 JWT signing secret and must contain at least 32 bytes; generate one with `openssl rand -hex 32`. Every proxied request must include a JWT signed with that secret and an unexpired `exp` claim:
 
 ```text
 Authorization: Bearer <HS256-JWT>
@@ -45,6 +45,29 @@ curl http://127.0.0.1:8000/api/generate \
   -H 'Content-Type: application/json' \
   -d '{"model":"llama3","prompt":"Hello","stream":true}'
 ```
+
+## Select Gemini or Ollama
+
+For `POST /api/generate`, the model name selects the provider: names beginning
+with `gemini-` are sent to Google's Gemini API, and other model names continue
+to use Ollama. Set `GEMINI_API_KEY` to enable Gemini. Gemini responses and
+streaming chunks use the proxy's Ollama-compatible response format.
+
+```bash
+curl http://127.0.0.1:8000/api/generate \
+  -H 'Authorization: Bearer <HS256-JWT>' \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"gemini-2.5-flash","prompt":"Hello","stream":false}'
+```
+
+To run the existing chart and Turso context pipeline with a Gemini model, set
+`"astrology": true` in the generation request. The configured astrology model
+continues to invoke that pipeline automatically.
+
+The `astrology_ask.py` CLI uses `PROXY_URL` (default `http://127.0.0.1:8000`)
+and signs a short-lived JWT with `API_TOKEN`. Set the same `API_TOKEN` for the
+proxy and CLI; it must be at least 32 bytes. The CLI can select Gemini with
+`--model gemini-2.5-flash`.
 
 ## Verify
 
