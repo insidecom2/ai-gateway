@@ -9,7 +9,9 @@ from typing import Any
 
 import httpx
 import swisseph as swe
+from fastapi.responses import JSONResponse, StreamingResponse
 
+from .gemini import generate_gemini, is_gemini_model
 from .turso import TursoAdapter
 
 ZODIAC_TH = [
@@ -313,12 +315,16 @@ async def run_astrology(
     model: str,
     body: dict[str, Any],
     top_k: int = 5,
-) -> httpx.Response:
+    *,
+    gemini_api_key: str = "",
+    timeout_seconds: float = 120.0,
+) -> httpx.Response | JSONResponse | StreamingResponse:
     question = _extract_question(body)
     if not question:
         raise ValueError("prompt หรือ messages ไม่พบ")
 
     chart_text: str | None = None
+    chart: dict[str, Any] | None = None
     birth_date, birth_time, lat, lon, tz_hours = _resolve_birth(body)
     if birth_date and birth_time and lat is not None and lon is not None:
         chart = cast_chart(birth_date, birth_time, lat, lon, tz_hours)
@@ -333,4 +339,14 @@ async def run_astrology(
 
     prompt = build_prompt(question, chunks, chart_text)
     stream = bool(body.get("stream", False))
+    if is_gemini_model(model):
+        return await generate_gemini(
+            ollama_client,
+            gemini_api_key,
+            model,
+            prompt,
+            system=SYSTEM_PROMPT,
+            stream=stream,
+            timeout_seconds=timeout_seconds,
+        )
     return await _call_ollama(ollama_client, ollama_url, model, prompt, stream)

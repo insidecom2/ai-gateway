@@ -13,12 +13,14 @@ class Settings:
     host: str = "127.0.0.1"
     port: int = 8000
     timeout_seconds: float = 120.0
+    gemini_api_key: str = ""
 
     @classmethod
     def from_env(cls) -> "Settings":
         return cls(
             api_token=os.getenv("API_TOKEN", ""),
             ollama_url=os.getenv("OLLAMA_URL", "").rstrip("/"),
+            gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
             host=os.getenv("HOST", cls.host),
             port=int(os.getenv("PORT", str(cls.port))),
             timeout_seconds=float(os.getenv("OLLAMA_TIMEOUT_SECONDS", str(cls.timeout_seconds))),

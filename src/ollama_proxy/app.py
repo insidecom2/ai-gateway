@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from .astrology import run_astrology
 from .config import Settings
+from .gemini import generate_gemini, is_gemini_model
 from .models import MODEL_GEMMA_CELESTIAL
 
 _HOP_BY_HOP_HEADERS = {
@@ -86,18 +87,40 @@ def create_app(settings: Settings | None = None, client: httpx.AsyncClient | Non
                 body = json.loads(await request.body())
             except (json.JSONDecodeError, UnicodeDecodeError):
                 body = {}
-            if body.get("model") == MODEL_GEMMA_CELESTIAL:
+            if not isinstance(body, dict):
+                body = {}
+
+            model = body.get("model", "")
+            use_gemini = is_gemini_model(model)
+            astrology_option = body.get("astrology")
+            use_astrology = (
+                astrology_option
+                if isinstance(astrology_option, bool)
+                else model == MODEL_GEMMA_CELESTIAL
+            )
+            if use_gemini and not resolved_settings.gemini_api_key:
+                return JSONResponse(
+                    {"detail": "GEMINI_API_KEY must be configured to use Gemini"},
+                    status_code=503,
+                )
+
+            if use_astrology:
                 try:
                     upstream = await run_astrology(
                         app.state.client,
                         resolved_settings.ollama_url,
-                        body.get("model"),
+                        model,
                         body,
+                        gemini_api_key=resolved_settings.gemini_api_key,
+                        timeout_seconds=resolved_settings.timeout_seconds,
                     )
                 except ValueError as exc:
                     return JSONResponse({"detail": str(exc)}, status_code=400)
-                except Exception as exc:
-                    return JSONResponse({"detail": f"ดูดวง pipeline error: {exc}"}, status_code=502)
+                except Exception:
+                    return JSONResponse({"detail": "ดูดวง pipeline error"}, status_code=502)
+
+                if isinstance(upstream, Response):
+                    return upstream
 
                 response_headers = _forward_headers(upstream.headers)
                 response_headers.update({"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
@@ -131,16 +154,41 @@ def create_app(settings: Settings | None = None, client: httpx.AsyncClient | Non
                     media_type=upstream.headers.get("content-type"),
                 )
 
+            if use_gemini:
+                prompt = body.get("prompt")
+                if not isinstance(prompt, str) or not prompt:
+                    return JSONResponse({"detail": "prompt is required for Gemini generation"}, status_code=400)
+                system = body.get("system")
+                return await generate_gemini(
+                    app.state.client,
+                    resolved_settings.gemini_api_key,
+                    model,
+                    prompt,
+                    system=system if isinstance(system, str) else None,
+                    stream=bool(body.get("stream", False)),
+                    timeout_seconds=resolved_settings.timeout_seconds,
+                )
+
         target = f"{resolved_settings.ollama_url}/{path}"
         if request.url.query:
             target = f"{target}?{request.url.query}"
 
         try:
+            content = await request.body()
+            if (
+                path == "api/generate"
+                and request.method == "POST"
+                and isinstance(body, dict)
+                and body.get("astrology") is False
+            ):
+                upstream_body = dict(body)
+                upstream_body.pop("astrology")
+                content = json.dumps(upstream_body).encode("utf-8")
             upstream_request = app.state.client.build_request(
                 request.method,
                 target,
                 headers=_forward_headers(request.headers),
-                content=await request.body(),
+                content=content,
             )
             upstream = await app.state.client.send(upstream_request, stream=True)
         except httpx.TimeoutException:
