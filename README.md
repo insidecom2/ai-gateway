@@ -63,8 +63,8 @@ curl http://127.0.0.1:8000/api/generate \
 
 To run the existing chart and Turso context pipeline with a Gemini model, set
 `"astrology": true` in the generation or chat request. For `/api/chat`, send
-the question in `messages`. The configured astrology model continues to invoke
-that pipeline automatically unless `astrology` is explicitly set to `false`.
+the question in `messages`. Astrology runs only when this flag is explicitly
+set to `true`, regardless of the selected model.
 
 ```bash
 curl http://127.0.0.1:8000/api/chat \
