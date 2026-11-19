@@ -66,6 +66,22 @@ To run the existing chart and Turso context pipeline with a Gemini model, set
 the question in `messages`. Astrology runs only when this flag is explicitly
 set to `true`, regardless of the selected model.
 
+Astrology requests require `birth_date` in `YYYY-MM-DD` format. `birth_time`
+(`HH:MM`) is optional. If omitted, the chart uses 12:00 local time as an
+approximation for planetary positions and does not report the ascendant or
+houses. If `birth_place`, `birth_lat`, and `birth_lon` are all omitted, the
+pipeline uses Bangkok. A supported Thai city name or both coordinates can be
+provided to use another birthplace.
+
+```json
+{
+  "model": "gemini-3.1-flash-lite",
+  "prompt": "ช่วยวิเคราะห์เรื่องงาน",
+  "astrology": true,
+  "birth_date": "1990-08-15"
+}
+```
+
 ```bash
 curl http://127.0.0.1:8000/api/chat \
   -H 'Authorization: Bearer <HS256-JWT>' \

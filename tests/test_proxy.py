@@ -232,6 +232,67 @@ async def test_astrology_flag_invalid_birth_place_returns_400():
 
 
 @pytest.mark.asyncio
+async def test_birth_date_only_uses_approximate_noon_and_defaults_birth_place_to_bangkok(monkeypatch):
+    import ollama_proxy.astrology as astrology
+
+    monkeypatch.setattr(astrology, "TursoAdapter", FakeTursoAdapter)
+    charts = []
+
+    async def fake_fetch_context(_adapter, _query, _limit, chart=None):
+        charts.append(chart)
+        return []
+
+    monkeypatch.setattr(astrology, "fetch_context", fake_fetch_context)
+
+    def handler(request: Request) -> HTTPXResponse:
+        payload = json.loads(request.content)
+        assert "เกิดวันที่ 1990-08-15 ไม่ทราบเวลา" in payload["prompt"]
+        assert "ใช้เวลา 12:00 น." in payload["prompt"]
+        assert "13.7563" in payload["prompt"]
+        assert "100.5018" in payload["prompt"]
+        assert "ห้ามสรุปลัคนาหรือเรือน" in payload["prompt"]
+        return HTTPXResponse(200, json={"response": "ภาพรวมตำแหน่งดาวโดยประมาณ"})
+
+    app = make_app(handler)
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://proxy") as client:
+        response = await client.post(
+            "/api/generate",
+            headers={"Authorization": f"Bearer {bearer_token()}"},
+            json={
+                "model": "llama3",
+                "prompt": "ช่วยดูดวงการงาน",
+                "astrology": True,
+                "birth_date": "1990-08-15",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["response"] == "ภาพรวมตำแหน่งดาวโดยประมาณ"
+    assert len(charts) == 1
+    assert charts[0]["birth_time_assumed"] is True
+    assert charts[0]["birth_time"] is None
+    assert charts[0]["ascendant"] is None
+    assert all(planet["house"] is None for planet in charts[0]["planets"].values())
+
+
+@pytest.mark.asyncio
+async def test_birth_date_is_required_for_astrology():
+    def handler(_: Request) -> HTTPXResponse:
+        raise AssertionError("a request without birth_date must not call the provider")
+
+    app = make_app(handler)
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://proxy") as client:
+        response = await client.post(
+            "/api/generate",
+            headers={"Authorization": f"Bearer {bearer_token()}"},
+            json={"model": "llama3", "prompt": "ช่วยดูดวงการงาน", "astrology": True},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "birth_date is required for astrology"
+
+
+@pytest.mark.asyncio
 async def test_other_models_bypass_astrology(monkeypatch):
     import ollama_proxy.astrology as astrology
 
@@ -594,6 +655,7 @@ async def test_gemini_chat_astrology_uses_messages_and_returns_chat_response(mon
                 "model": "gemini-test",
                 "messages": [{"role": "user", "content": "อยากรู้ดวงการงาน"}],
                 "astrology": True,
+                "birth_date": "1990-08-15",
                 "options": {"num_predict": 700},
                 "stream": False,
             },
@@ -620,6 +682,37 @@ def test_detect_response_language(text, expected):
     from ollama_proxy.astrology import detect_response_language
 
     assert detect_response_language(text) == expected
+
+
+def test_astrology_prompt_explains_rag_content_without_source_citations():
+    from ollama_proxy.astrology import SYSTEM_PROMPT, build_prompt
+
+    prompt = build_prompt(
+        "วิเคราะห์เรื่องงาน",
+        [
+            {
+                "content": "ดาวพุธสัมพันธ์กับการสื่อสารและการเจรจา",
+                "content_summary": "ดาวพุธ",
+                "category": "planet",
+                "topic": "communication",
+                "planet_name": "พุธ",
+                "keywords_json": '["งาน"]',
+                "document_key": "private-document",
+                "chunk_key": "private-chunk",
+                "source_locator": "private-locator",
+            }
+        ],
+    )
+
+    assert "ดาวพุธสัมพันธ์กับการสื่อสารและการเจรจา" in prompt
+    assert "private-document" not in prompt
+    assert "private-chunk" not in prompt
+    assert "private-locator" not in prompt
+    assert "keywords_json" not in prompt
+    assert "เครื่องหมายอ้างอิงแบบวงเล็บเหลี่ยม" in SYSTEM_PROMPT
+    assert "[1]" not in SYSTEM_PROMPT
+    assert "[1]" not in prompt
+    assert "คำตอบเป็นภาพรวม" in prompt
 
 
 @pytest.mark.asyncio
@@ -678,6 +771,7 @@ async def test_english_astrology_question_is_translated_before_rag_and_answer_la
                 "model": "llama3",
                 "prompt": "Tell me about my career this year",
                 "astrology": True,
+                "birth_date": "1990-08-15",
                 "stream": False,
             },
         )
@@ -737,6 +831,7 @@ async def test_chinese_gemini_astrology_translates_query_and_requests_chinese_an
                 "model": "gemini-test",
                 "messages": [{"role": "user", "content": "请分析我的事业运势"}],
                 "astrology": True,
+                "birth_date": "1990-08-15",
                 "stream": False,
             },
         )
@@ -789,6 +884,7 @@ async def test_chinese_ollama_chat_translates_query_and_requests_chinese_answer(
                 "model": "llama3",
                 "messages": [{"role": "user", "content": "请分析我的事业运势"}],
                 "astrology": True,
+                "birth_date": "1990-08-15",
                 "stream": False,
             },
         )
@@ -810,7 +906,12 @@ async def test_translation_provider_failure_returns_gateway_error_without_rag_lo
         response = await client.post(
             "/api/generate",
             headers={"Authorization": f"Bearer {bearer_token()}"},
-            json={"model": "gemini-test", "prompt": "How is my career?", "astrology": True},
+            json={
+                "model": "gemini-test",
+                "prompt": "How is my career?",
+                "astrology": True,
+                "birth_date": "1990-08-15",
+            },
         )
 
     assert response.status_code == 502
@@ -846,7 +947,13 @@ async def test_astrology_streaming_keeps_ollama_ndjson_response_shape(monkeypatc
         response = await client.post(
             "/api/generate",
             headers={"Authorization": f"Bearer {bearer_token()}"},
-            json={"model": "llama3", "prompt": "ช่วยดูดวงการงาน", "astrology": True, "stream": True},
+            json={
+                "model": "llama3",
+                "prompt": "ช่วยดูดวงการงาน",
+                "astrology": True,
+                "birth_date": "1990-08-15",
+                "stream": True,
+            },
         )
 
     assert response.status_code == 200
