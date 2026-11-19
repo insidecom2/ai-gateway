@@ -8,7 +8,6 @@ from httpx import ASGITransport, MockTransport, Request, Response as HTTPXRespon
 
 from ollama_proxy.app import create_app
 from ollama_proxy.config import Settings
-from ollama_proxy.models import MODEL_GEMMA_CELESTIAL
 
 TOKEN_SECRET = "a-32-byte-minimum-hs256-test-key"
 
@@ -159,7 +158,7 @@ class _ResultSet:
 
 
 @pytest.mark.asyncio
-async def test_gemma_celestial_runs_astrology_pipeline(monkeypatch):
+async def test_astrology_flag_runs_pipeline_for_any_model(monkeypatch):
     import ollama_proxy.astrology as astrology
 
     fake = FakeTursoAdapter(
@@ -188,7 +187,7 @@ async def test_gemma_celestial_runs_astrology_pipeline(monkeypatch):
         assert "ลัคนา" in body
         assert "ภพที่ 10" in body
         assert "อยากรู้ดวงการงาน" in body
-        return HTTPXResponse(200, json={"model": MODEL_GEMMA_CELESTIAL, "response": "ดวงการงาน..."})
+        return HTTPXResponse(200, json={"model": "llama3", "response": "ดวงการงาน..."})
 
     app = make_app(handler)
     async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://proxy") as client:
@@ -196,8 +195,9 @@ async def test_gemma_celestial_runs_astrology_pipeline(monkeypatch):
             "/api/generate",
             headers={"Authorization": f"Bearer {bearer_token()}"},
             json={
-                "model": MODEL_GEMMA_CELESTIAL,
+                "model": "llama3",
                 "prompt": "อยากรู้ดวงการงานปีนี้เป็นอย่างไร",
+                "astrology": True,
                 "birth_date": "1990-08-15",
                 "birth_time": "06:30",
                 "birth_place": "กรุงเทพ",
@@ -209,7 +209,7 @@ async def test_gemma_celestial_runs_astrology_pipeline(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_gemma_celestial_invalid_birth_place_returns_400():
+async def test_astrology_flag_invalid_birth_place_returns_400():
     async def handler(_: Request) -> HTTPXResponse:
         raise AssertionError("should not reach Ollama")
 
@@ -219,8 +219,9 @@ async def test_gemma_celestial_invalid_birth_place_returns_400():
             "/api/generate",
             headers={"Authorization": f"Bearer {bearer_token()}"},
             json={
-                "model": MODEL_GEMMA_CELESTIAL,
+                "model": "llama3",
                 "prompt": "ดูดวง",
+                "astrology": True,
                 "birth_date": "1990-08-15",
                 "birth_time": "06:30",
                 "birth_place": "ไม่มีเมืองนี้",
@@ -260,7 +261,7 @@ async def test_other_models_bypass_astrology(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_explicit_astrology_false_bypasses_default_pipeline_and_is_not_forwarded(monkeypatch):
+async def test_astrology_false_bypasses_pipeline_and_is_not_forwarded(monkeypatch):
     import ollama_proxy.app as proxy_app
 
     async def fail_if_called(*args, **kwargs):
@@ -269,7 +270,7 @@ async def test_explicit_astrology_false_bypasses_default_pipeline_and_is_not_for
     monkeypatch.setattr(proxy_app, "run_astrology", fail_if_called)
 
     def handler(request: Request) -> HTTPXResponse:
-        assert json.loads(request.content) == {"model": MODEL_GEMMA_CELESTIAL, "prompt": "already enriched"}
+        assert json.loads(request.content) == {"model": "llama3", "prompt": "already enriched"}
         return HTTPXResponse(200, json={"response": "ok"})
 
     app = make_app(handler)
@@ -277,7 +278,7 @@ async def test_explicit_astrology_false_bypasses_default_pipeline_and_is_not_for
         response = await client.post(
             "/api/generate",
             headers={"Authorization": f"Bearer {bearer_token()}"},
-            json={"model": MODEL_GEMMA_CELESTIAL, "prompt": "already enriched", "astrology": False},
+            json={"model": "llama3", "prompt": "already enriched", "astrology": False},
         )
     assert response.status_code == 200
     assert response.json() == {"response": "ok"}

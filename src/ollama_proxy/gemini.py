@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from typing import Any
 from urllib.parse import quote
 
 import httpx
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
+from starlette.exceptions import HTTPException
 
 _GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
@@ -164,12 +166,7 @@ async def generate_gemini(
         timeout=httpx.Timeout(timeout_seconds),
     )
 
-    try:
-        upstream = await client.send(request, stream=stream)
-    except httpx.TimeoutException:
-        return JSONResponse({"detail": "Gemini request timed out"}, status_code=504)
-    except httpx.RequestError:
-        return JSONResponse({"detail": "Gemini service unavailable"}, status_code=502)
+    upstream = await send_gemini_request(client=client, request=request, stream=stream)
 
     if not upstream.is_success:
         await upstream.aclose()
@@ -197,3 +194,30 @@ async def generate_gemini(
     if chat:
         return JSONResponse({"model": model, "message": {"role": "assistant", "content": text}, "done": True})
     return JSONResponse({"model": model, "response": text, "done": True})
+
+async def send_gemini_request(
+    client: httpx.AsyncClient,
+    request: httpx.Request,
+    stream: bool = False,
+    max_attempts: int = 3,
+)-> httpx.Response:
+    for retry in range (max_attempts):
+        try:
+           return await client.send(request, stream=stream)
+        except httpx.TimeoutException:
+            if retry == max_attempts -1:
+                raise HTTPException(
+                        status_code=504,
+                        detail="Gemini request timed out"
+                    )
+            await asyncio.sleep(2*max_attempts)
+
+        except httpx.RequestError:
+            if retry == max_attempts -1:
+                raise HTTPException(
+                        status_code=502,
+                        detail="Gemini service unavailable"
+                    )
+            await asyncio.sleep(2*max_attempts)
+
+    raise RuntimeError("Unexpected retry state")

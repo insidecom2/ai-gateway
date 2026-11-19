@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
-import os
+import asyncio
 from datetime import datetime
 from typing import Any
 
 import httpx
+from starlette.exceptions import HTTPException
 import swisseph as swe
 from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -147,13 +147,13 @@ def cast_chart(
 
 def format_chart(chart: dict[str, Any]) -> str:
     lines = [
-        f"เกิดวันที่ {chart['birth_date']} เวลา {chart['birth_time']} (UTC+{chart['tz_hours']:g}) "
-        f"ที่ละติจูด {chart['lat']}, ลองจิจูด {chart['lon']}",
+        (f"เกิดวันที่ {chart['birth_date']} เวลา {chart['birth_time']} (UTC+{chart['tz_hours']:g}) "
+        f"ที่ละติจูด {chart['lat']}, ลองจิจูด {chart['lon']}"),
         f"ระบบ: {'นิรายนะ (Lahiri)' if chart['sidereal'] else 'สายนะ (Tropical)'}",
         f"ลัคนา (Ascendant): {chart['ascendant']['zodiac']} ราศี {chart['ascendant']['degree_in_sign']:.2f}°",
     ]
     lines.append("ตำแหน่งดาวนพเคราะห์:")
-    for code, p in chart["planets"].items():
+    for p in chart["planets"].values():
         lines.append(
             f"- {p['name_th']}: {p['zodiac']} {p['degree_in_sign']:.2f}° (เรือน {p['house']}, "
             f"ราศีที่ {p['zodiac_number']})"
@@ -315,11 +315,40 @@ async def _call_ollama(
         endpoint = "api/generate"
     if options:
         payload["options"] = options
-    return await client.post(
-        f"{ollama_url}/{endpoint}",
-        json=payload,
-        timeout=httpx.Timeout(300.0),
-    )
+    return await send_ollama_request(client=client, url=f"{ollama_url}/{endpoint}", payload=payload)
+
+async def send_ollama_request(
+    client: httpx.AsyncClient,
+    url: str,
+    payload: dict[str,Any],
+    timeout: float = 300.0,
+    max_attempts: int = 3
+)-> httpx.Response:
+
+    for retry in range (max_attempts):
+        try:
+           return await client.post(
+               f"{url}",
+               json=payload,
+               timeout=httpx.Timeout(timeout),
+           )
+        except httpx.TimeoutException:
+            if retry == max_attempts -1:
+                raise HTTPException(
+                        status_code=504,
+                        detail="Gemini request timed out"
+                    )
+            await asyncio.sleep(2*max_attempts)
+
+        except httpx.RequestError:
+            if retry == max_attempts -1:
+                raise HTTPException(
+                        status_code=502,
+                        detail="Gemini service unavailable"
+                    )
+            await asyncio.sleep(2*max_attempts)
+
+    raise RuntimeError("Unexpected retry state")
 
 
 async def run_astrology(

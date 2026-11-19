@@ -10,7 +10,6 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from .astrology import run_astrology
 from .config import Settings
 from .gemini import generate_gemini, is_gemini_model
-from .models import MODEL_GEMMA_CELESTIAL
 
 _HOP_BY_HOP_HEADERS = {
     "connection",
@@ -55,7 +54,7 @@ def _is_authorized(request: Request, expected_token: str) -> bool:
 def create_app(settings: Settings | None = None, client: httpx.AsyncClient | None = None) -> FastAPI:
     resolved_settings = settings or Settings.from_env()
 
-    @asynccontextmanager
+    @asynccontextmanager  # pyright: ignore[reportDeprecated]
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if not resolved_settings.api_token:
             raise RuntimeError("API_TOKEN must be set")
@@ -93,12 +92,7 @@ def create_app(settings: Settings | None = None, client: httpx.AsyncClient | Non
 
             model = body.get("model", "")
             use_gemini = is_gemini_model(model)
-            astrology_option = body.get("astrology")
-            use_astrology = (
-                astrology_option
-                if isinstance(astrology_option, bool)
-                else model == MODEL_GEMMA_CELESTIAL
-            )
+            use_astrology = body.get("astrology") is True
             if use_gemini and not resolved_settings.gemini_api_key:
                 return JSONResponse(
                     {"detail": "GEMINI_API_KEY must be configured to use Gemini"},
