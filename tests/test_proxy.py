@@ -604,3 +604,251 @@ async def test_gemini_chat_astrology_uses_messages_and_returns_chat_response(mon
         "message": {"role": "assistant", "content": "ดวงจาก Gemini chat"},
         "done": True,
     }
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Tell me about my career this year", "English"),
+        ("请分析我的事业运势", "Chinese"),
+        ("ช่วยดูดวงการงานให้หน่อย", "Thai"),
+        ("OK", "Thai"),
+        ("Hi 你好", "Thai"),
+    ],
+)
+def test_detect_response_language(text, expected):
+    from ollama_proxy.astrology import detect_response_language
+
+    assert detect_response_language(text) == expected
+
+
+@pytest.mark.asyncio
+async def test_english_astrology_question_is_translated_before_rag_and_answer_language_is_requested(monkeypatch):
+    import ollama_proxy.astrology as astrology
+
+    FakeTursoAdapter._rows = []
+    monkeypatch.setattr(astrology, "TursoAdapter", FakeTursoAdapter)
+    retrieved_queries = []
+
+    async def fake_fetch_context(_adapter, query, _limit, chart=None):
+        retrieved_queries.append(query)
+        return [
+            {
+                "content": "ภพที่ 10 ใช้พิจารณาหน้าที่การงาน",
+                "display_name": "โหราศาสตร์ไทย",
+                "description": "ตัวอย่าง",
+                "house_method": "Whole Sign",
+                "ayanamsa_note": "Lahiri",
+                "document_key": "private-doc",
+                "chunk_key": "private-chunk",
+                "source_locator": "private-source",
+                "keywords_json": "[]",
+            }
+        ]
+
+    monkeypatch.setattr(astrology, "fetch_context", fake_fetch_context)
+    request_count = 0
+
+    def handler(request: Request) -> HTTPXResponse:
+        nonlocal request_count
+        request_count += 1
+        payload = json.loads(request.content)
+        if request_count == 1:
+            assert "ผู้แปล" in payload["system"]
+            assert "Tell me about my career this year" in payload["prompt"]
+            return HTTPXResponse(200, json={"response": "ช่วยวิเคราะห์เรื่องการงานของฉันในปีนี้"})
+
+        prompt = payload["prompt"]
+        assert "ช่วยวิเคราะห์เรื่องการงานของฉันในปีนี้" in prompt
+        assert "Tell me about my career this year" not in prompt
+        assert "ภาษา English" in prompt
+        assert "ภพที่ 10 ใช้พิจารณาหน้าที่การงาน" in prompt
+        assert "private-doc" not in prompt
+        assert "private-chunk" not in prompt
+        assert "private-source" not in prompt
+        assert "document_key" not in payload["system"]
+        return HTTPXResponse(200, json={"response": "Your career outlook is shaped by your public role."})
+
+    app = make_app(handler)
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://proxy") as client:
+        response = await client.post(
+            "/api/generate",
+            headers={"Authorization": f"Bearer {bearer_token()}"},
+            json={
+                "model": "llama3",
+                "prompt": "Tell me about my career this year",
+                "astrology": True,
+                "stream": False,
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["response"] == "Your career outlook is shaped by your public role."
+    assert retrieved_queries == ["ช่วยวิเคราะห์เรื่องการงานของฉันในปีนี้"]
+    assert request_count == 2
+
+
+@pytest.mark.asyncio
+async def test_chinese_gemini_astrology_translates_query_and_requests_chinese_answer(monkeypatch):
+    import ollama_proxy.astrology as astrology
+
+    FakeTursoAdapter._rows = []
+    monkeypatch.setattr(astrology, "TursoAdapter", FakeTursoAdapter)
+    retrieved_queries = []
+
+    async def fake_fetch_context(_adapter, query, _limit, chart=None):
+        retrieved_queries.append(query)
+        return [{"content": "ภพที่ 10 ใช้พิจารณาหน้าที่การงาน"}]
+
+    monkeypatch.setattr(astrology, "fetch_context", fake_fetch_context)
+    request_count = 0
+
+    def handler(request: Request) -> HTTPXResponse:
+        nonlocal request_count
+        request_count += 1
+        payload = json.loads(request.content)
+        if request_count == 1:
+            system = payload["systemInstruction"]["parts"][0]["text"]
+            assert "ผู้แปล" in system
+            assert "请分析我的事业运势" in payload["contents"][0]["parts"][0]["text"]
+            return HTTPXResponse(
+                200,
+                json={"candidates": [{"content": {"parts": [{"text": "ช่วยวิเคราะห์ดวงการงานของฉัน"}]}}]},
+            )
+
+        system = payload["systemInstruction"]["parts"][0]["text"]
+        prompt = payload["contents"][0]["parts"][0]["text"]
+        assert system == astrology.SYSTEM_PROMPT
+        assert "ช่วยวิเคราะห์ดวงการงานของฉัน" in prompt
+        assert "ภาษา Chinese" in prompt
+        assert "ภพที่ 10 ใช้พิจารณาหน้าที่การงาน" in prompt
+        assert "document_key" not in prompt
+        return HTTPXResponse(
+            200,
+            json={"candidates": [{"content": {"parts": [{"text": "你的事业运势与公开角色有关。"}]}}]},
+        )
+
+    app = make_app(handler, gemini_api_key="secret-gemini-key")
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://proxy") as client:
+        response = await client.post(
+            "/api/chat",
+            headers={"Authorization": f"Bearer {bearer_token()}"},
+            json={
+                "model": "gemini-test",
+                "messages": [{"role": "user", "content": "请分析我的事业运势"}],
+                "astrology": True,
+                "stream": False,
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["message"]["content"] == "你的事业运势与公开角色有关。"
+    assert retrieved_queries == ["ช่วยวิเคราะห์ดวงการงานของฉัน"]
+    assert request_count == 2
+
+
+@pytest.mark.asyncio
+async def test_chinese_ollama_chat_translates_query_and_requests_chinese_answer(monkeypatch):
+    import ollama_proxy.astrology as astrology
+
+    monkeypatch.setattr(astrology, "TursoAdapter", FakeTursoAdapter)
+    retrieved_queries = []
+
+    async def fake_fetch_context(_adapter, query, _limit, chart=None):
+        retrieved_queries.append(query)
+        return [{"content": "ภพที่ 10 ใช้พิจารณาหน้าที่การงาน"}]
+
+    monkeypatch.setattr(astrology, "fetch_context", fake_fetch_context)
+    request_count = 0
+
+    def handler(request: Request) -> HTTPXResponse:
+        nonlocal request_count
+        request_count += 1
+        payload = json.loads(request.content)
+        if request_count == 1:
+            assert request.url.path.endswith("/api/generate")
+            assert "请分析我的事业运势" in payload["prompt"]
+            return HTTPXResponse(200, json={"response": "ช่วยวิเคราะห์ดวงการงานของฉัน"})
+
+        assert request.url.path.endswith("/api/chat")
+        assert payload["messages"][0]["role"] == "system"
+        assert payload["messages"][1]["content"].startswith("### ระบบโหราศาสตร์ที่ใช้")
+        prompt = payload["messages"][1]["content"]
+        assert "ช่วยวิเคราะห์ดวงการงานของฉัน" in prompt
+        assert "ภาษา Chinese" in prompt
+        assert "ภพที่ 10 ใช้พิจารณาหน้าที่การงาน" in prompt
+        assert "source_locator" not in prompt
+        return HTTPXResponse(200, json={"message": {"role": "assistant", "content": "你的事业运势与公开角色有关。"}})
+
+    app = make_app(handler)
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://proxy") as client:
+        response = await client.post(
+            "/api/chat",
+            headers={"Authorization": f"Bearer {bearer_token()}"},
+            json={
+                "model": "llama3",
+                "messages": [{"role": "user", "content": "请分析我的事业运势"}],
+                "astrology": True,
+                "stream": False,
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["message"]["content"] == "你的事业运势与公开角色有关。"
+    assert retrieved_queries == ["ช่วยวิเคราะห์ดวงการงานของฉัน"]
+    assert request_count == 2
+
+
+@pytest.mark.asyncio
+async def test_translation_provider_failure_returns_gateway_error_without_rag_lookup():
+    def handler(request: Request) -> HTTPXResponse:
+        assert request.url.host == "generativelanguage.googleapis.com"
+        return HTTPXResponse(503, json={"error": {"message": "temporarily unavailable"}})
+
+    app = make_app(handler, gemini_api_key="secret-gemini-key")
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://proxy") as client:
+        response = await client.post(
+            "/api/generate",
+            headers={"Authorization": f"Bearer {bearer_token()}"},
+            json={"model": "gemini-test", "prompt": "How is my career?", "astrology": True},
+        )
+
+    assert response.status_code == 502
+    assert response.json() == {"detail": "ดูดวง pipeline error"}
+    assert "temporarily unavailable" not in response.text
+    assert "How is my career?" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_astrology_streaming_keeps_ollama_ndjson_response_shape(monkeypatch):
+    import ollama_proxy.astrology as astrology
+
+    monkeypatch.setattr(astrology, "TursoAdapter", FakeTursoAdapter)
+
+    async def empty_context(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(astrology, "fetch_context", empty_context)
+
+    def handler(request: Request) -> HTTPXResponse:
+        payload = json.loads(request.content)
+        assert payload["stream"] is True
+        assert "ภาษา Thai" in payload["prompt"]
+        assert "source_locator" not in payload["prompt"]
+        return HTTPXResponse(
+            200,
+            headers={"content-type": "application/x-ndjson"},
+            content=b'{"response":"forecast","done":false}\n{"response":"","done":true}\n',
+        )
+
+    app = make_app(handler)
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://proxy") as client:
+        response = await client.post(
+            "/api/generate",
+            headers={"Authorization": f"Bearer {bearer_token()}"},
+            json={"model": "llama3", "prompt": "ช่วยดูดวงการงาน", "astrology": True, "stream": True},
+        )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/x-ndjson")
+    assert response.text == '{"response":"forecast","done":false}\n{"response":"","done":true}\n'
